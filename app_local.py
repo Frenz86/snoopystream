@@ -1,8 +1,11 @@
-import av
 import cv2
 import streamlit as st
-from streamlit_webrtc import WebRtcMode, webrtc_streamer
 from PIL import Image
+import numpy as np
+
+# Load the images
+specs_ori = cv2.imread('glass.png', -1)
+cigar_ori = cv2.imread('cigar.png', -1)
 
 def transparentOverlay(src, overlay, pos=(0, 0), scale=1):
     overlay = cv2.resize(overlay, (0, 0), fx=scale, fy=scale)
@@ -21,9 +24,6 @@ def transparentOverlay(src, overlay, pos=(0, 0), scale=1):
 def detect_faces(frame):
     face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
     faces = face_cascade.detectMultiScale(frame, 1.2, 5, 0, (120, 120), (350, 350))
-
-    specs_ori = cv2.imread('glass.png', -1)
-    cigar_ori = cv2.imread('cigar.png', -1)
 
     for (x, y, w, h) in faces:
         if h > 0 and w > 0:
@@ -46,27 +46,32 @@ def detect_faces(frame):
     
     return frame
 
-class VideoTransformer:
-    def transform(self, frame):
-        img = frame.to_ndarray(format="bgr24")
-        img = detect_faces(img)
-        return av.VideoFrame.from_ndarray(img, format="bgr24")
-
-COMMON_RTC_CONFIG = {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
-
 def main():
     st.title("Thug Life Generator")
     image = Image.open('thug.jpg')
-    st.image(image, width=420)
+    st.image(image,width=420)
 
-    webrtc_streamer(key="example", mode=WebRtcMode.SENDRECV, rtc_configuration=COMMON_RTC_CONFIG,
-                    media_stream_constraints={"video": True, "audio": False},
-                    video_processor_factory=VideoTransformer)
+    if st.button('Start'):
+        audio_file = open("snoop.mp3", "rb")
+        audio_bytes = audio_file.read()
+        st.audio(audio_bytes, format="audio/mp3",loop=True,autoplay=True)
 
-    audio_file = open("snoop.mp3", "rb")
-    audio_bytes = audio_file.read()
-    st.audio(audio_bytes, format="audio/mp3", loop=True, autoplay=True)
+        FRAME_WINDOW = st.image([])
+        run = True
+        video_capture = cv2.VideoCapture(0)
 
+        while run:
+            ret, frame = video_capture.read()
+            if not ret:
+                st.error("Failed to capture frame from webcam. Please check your webcam connection.")
+                break
+            frame = cv2.flip(frame, 1)
+            frame_with_faces = detect_faces(frame)
+            FRAME_WINDOW.image(frame_with_faces, channels="BGR", caption="Video Feed")
+        video_capture.release()
+        
+    else:
+        st.success("Click the 'Start' for an Thug Selfie")
 
 if __name__ == "__main__":
     main()
