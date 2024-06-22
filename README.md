@@ -6,4 +6,4 @@ pip install -r requirements.txt
 
 lanciare:
 
-stremalit run app.py
+streamlit run app.py
