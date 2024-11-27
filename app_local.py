@@ -3,114 +3,122 @@ import streamlit as st
 from PIL import Image
 import numpy as np
 
-# Cache del classificatore e delle immagini per evitare ricaricamenti
 @st.cache_resource
-def load_resources():
+def load_images():
+    specs_ori = cv2.imread('glass.png', -1)
+    cigar_ori = cv2.imread('cigar.png', -1)
     face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
-    specs = cv2.imread('glass.png', -1)
-    cigar = cv2.imread('cigar.png', -1)
-    return face_cascade, specs, cigar
+    return specs_ori, cigar_ori, face_cascade
 
-def transparentOverlay(src, overlay, pos=(0, 0), scale=1):
-    # Utilizzo di numpy per operazioni vettorizzate invece del ciclo for
-    overlay = cv2.resize(overlay, (0, 0), fx=scale, fy=scale)
-    h, w, _ = overlay.shape
-    rows, cols, _ = src.shape
-    y, x = pos[0], pos[1]
+def transparentOverlay(src, overlay, pos=(0, 0)):
+    """
+    Applica un overlay trasparente su un'immagine sorgente.
+    Args:
+        src: Immagine sorgente (ROI dove applicare l'overlay)
+        overlay: Immagine con trasparenza da sovrapporre
+        pos: Posizione (x, y) dove applicare l'overlay. Default (0, 0)
+    """
+    # Se l'overlay è vuoto o più grande della sorgente, ritorna la sorgente
+    if overlay.shape[0] > src.shape[0] or overlay.shape[1] > src.shape[1]:
+        return src
+
+    # Separa il canale alpha dall'overlay
+    overlay_alpha = overlay[:, :, 3] / 255.0
+    overlay_3chan = overlay[:, :, :3]
     
-    # Controlla i limiti dell'immagine
-    if x + h > rows or y + w > cols:
+    # Espandi gli assi per la trasmissione corretta
+    alpha = overlay_alpha[..., np.newaxis]
+    
+    # Calcola la miscelazione usando il canale alpha
+    try:
+        # Formula: output = alpha * overlay + (1 - alpha) * background
+        src[:] = overlay_3chan * alpha + src * (1.0 - alpha)
+    except ValueError:
+        # In caso di dimensioni non corrispondenti, ritorna l'immagine originale
         return src
         
-    # Estrai il canale alpha e crea la maschera
-    alpha = overlay[:, :, 3] / 255.0
-    alpha = np.expand_dims(alpha, axis=-1)
-    
-    # Calcola la regione di sovrapposizione
-    overlay_region = src[x:x+h, y:y+w]
-    overlay_colors = overlay[:, :, :3]
-    
-    # Applica la sovrapposizione usando operazioni vettorizzate
-    src[x:x+h, y:y+w] = (alpha * overlay_colors + (1 - alpha) * overlay_region).astype(np.uint8)
-    
     return src
 
-def detect_faces(frame, face_cascade, specs_ori, cigar_ori):
-    # Converti in scala di grigi per una rilevazione più veloce
+def detect_faces(frame, specs_ori, cigar_ori, face_cascade):
+    """Rileva volti e aggiunge occhiali e sigaro con posizionamento corretto."""
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     faces = face_cascade.detectMultiScale(
-        gray, 
-        scaleFactor=1.2, 
-        minNeighbors=5, 
-        minSize=(120, 120), 
-        maxSize=(350, 350)
+        gray,
+        scaleFactor=1.1,
+        minNeighbors=5,
+        minSize=(100, 100),
+        maxSize=(400, 400)
     )
 
     for (x, y, w, h) in faces:
-        # Calcola le dimensioni una sola volta
-        glass_symin = int(y + 1.5 * h / 5)
-        glass_symax = int(y + 2.5 * h / 5)
-        sh_glass = glass_symax - glass_symin
-
-        cigar_symin = int(y + 4 * h / 6)
-        cigar_symax = int(y + 5.5 * h / 6)
-        sh_cigar = cigar_symax - cigar_symin
-
-        # Ridimensiona gli accessori una sola volta per faccia
-        specs = cv2.resize(specs_ori, (w, sh_glass), interpolation=cv2.INTER_LINEAR)
-        cigar = cv2.resize(cigar_ori, (w, sh_cigar), interpolation=cv2.INTER_LINEAR)
-
-        # Applica gli overlay
-        frame[glass_symin:glass_symax, x:x+w] = transparentOverlay(
-            frame[glass_symin:glass_symax, x:x+w], 
-            specs
-        )
-        frame[cigar_symin:cigar_symax, x:x+w] = transparentOverlay(
-            frame[cigar_symin:cigar_symax, x:x+w],
-            cigar,
-            (int(w/2), int(sh_cigar/2))
-        )
+        # Occhiali
+        glass_height = int(h / 5)
+        glass_y = y + int(1.5 * glass_height)
+        glass_roi = frame[glass_y:glass_y + glass_height, x:x + w]
+        
+        # Sigaro - posizionamento completamente rivisto
+        cigar_height = int(h / 6)  # Altezza del sigaro
+        cigar_width = w // 3  # Larghezza del sigaro
+        
+        # Nuove coordinate per il sigaro - spostate a sinistra e in alto
+        mouth_y = y + int(3.4 * h / 4)  # Spostato ancora più in alto
+        mouth_x = x + int(w / 1.7)  # Spostato molto più a sinistra
+        
+        # Calcolo posizione finale del sigaro
+        cigar_y = mouth_y - cigar_height // 3  # Aggiustato per posizione più alta
+        cigar_x = mouth_x - cigar_width // 2  # Centrato rispetto al nuovo punto
+        
+        # Verifica che le ROI siano valide
+        if glass_roi.size > 0 and cigar_y + cigar_height <= frame.shape[0] and cigar_x + cigar_width <= frame.shape[1]:
+            # Ridimensiona gli overlay
+            specs = cv2.resize(specs_ori, (w, glass_height), interpolation=cv2.INTER_LINEAR)
+            cigar = cv2.resize(cigar_ori, (cigar_width, cigar_height), interpolation=cv2.INTER_LINEAR)
+            
+            # Applica gli overlay
+            transparentOverlay(glass_roi, specs)
+            
+            # Definisci e applica la ROI per il sigaro
+            cigar_roi = frame[cigar_y:cigar_y + cigar_height, cigar_x:cigar_x + cigar_width]
+            if cigar_roi.size > 0:
+                transparentOverlay(cigar_roi, cigar)
     
     return frame
 
 def main():
+    """Funzione principale Streamlit ottimizzata."""
     st.title("Thug Life Generator")
     
-    # Carica le risorse una sola volta
-    face_cascade, specs_ori, cigar_ori = load_resources()
+    specs_ori, cigar_ori, face_cascade = load_images()
     
     image = Image.open('thug.jpg')
     st.image(image, width=420)
 
     if st.button('Start'):
-        # Carica l'audio una sola volta
         audio_file = open("snoop.mp3", "rb")
         audio_bytes = audio_file.read()
-        st.audio(audio_bytes, format="audio/mp3", loop=True, autoplay=True)
+        st.audio(audio_bytes, format="audio/mp3", loop=True)
 
         FRAME_WINDOW = st.image([])
-        video_capture = cv2.VideoCapture(0)
         
-        # Imposta parametri ottimali per la webcam
+        video_capture = cv2.VideoCapture(0)
         video_capture.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
         video_capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-        video_capture.set(cv2.CAP_PROP_FPS, 30)
-
+        
         try:
             while True:
                 ret, frame = video_capture.read()
                 if not ret:
-                    st.error("Errore nella cattura del frame dalla webcam.")
+                    st.error("Errore durante la cattura del frame.")
                     break
                     
                 frame = cv2.flip(frame, 1)
-                frame_with_faces = detect_faces(frame, face_cascade, specs_ori, cigar_ori)
+                frame_with_faces = detect_faces(frame, specs_ori, cigar_ori, face_cascade)
                 FRAME_WINDOW.image(frame_with_faces, channels="BGR")
                 
         finally:
             video_capture.release()
     else:
-        st.success("Clicca 'Start' per un Selfie Thug")
+        st.success("Clicca su 'Start' per iniziare il Thug Life!")
 
 if __name__ == "__main__":
     main()
